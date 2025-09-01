@@ -1,139 +1,129 @@
 name: build
 
 on:
-  push:
-    branches:
-      - main
+    push:
+        branches:
+            - main
 
 permissions:
-  contents: write
+    contents: write
 
 env:
-  CGO_ENABLED: "1"
+    CGO_ENABLED: '1'
 
 jobs:
-  linux:
-    name: Linux (amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    linux:
+        name: Linux (amd64)
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.6"
-          cache: true
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: '1.24.6'
+                  cache: true
 
-      # 只需要基本編譯工具（gcc/make），不安裝 raylib
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt install libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev libwayland-dev libxkbcommon-dev
+            # 只需要基本編譯工具（gcc/make），不安裝 raylib
+            - name: Install build tools
+              run: |
+                  sudo apt-get update
+                  sudo apt install libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev libwayland-dev libxkbcommon-dev
 
-      - name: Build
-        run: make release
+            - name: Build
+              run: make release
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-linux-amd64
-          path: dist/*linux-amd64
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ github.event.repository.name }}-linux-amd64
+                  path: dist/*linux-amd64
 
-  windows:
-    name: Windows (amd64)
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
+    windows:
+        name: Windows (amd64)
+        runs-on: windows-latest
+        defaults:
+            run:
+                shell: msys2 {0}
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.6"
-          cache: true
+        steps:
+            - uses: actions/checkout@v4
 
-      # 只裝 MSYS2 + MinGW toolchain，不裝 raylib
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            base-devel
-            mingw-w64-x86_64-toolchain
-            make
+            - name: Setup MSYS2 (toolchain + Go)
+              uses: msys2/setup-msys2@v2
+              with:
+                  msystem: MINGW64
+                  update: true
+                  install: >-
+                      base-devel
+                      mingw-w64-x86_64-toolchain
+                      mingw-w64-x86_64-go
+                      mingw-w64-x86_64-pkg-config
+                      make
 
-      - name: Print toolchain
-        run: |
-          which go
-          which x86_64-w64-mingw32-gcc
-          x86_64-w64-mingw32-gcc --version
+            - name: Print versions
+              run: |
+                  which go && go version
+                  which gcc && gcc --version
+                  go env
 
-      - name: Build
-        run: make release
+            - name: Build
+              run: make # or make build / make release
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-windows-amd64
-          path: dist/*windows-amd64.exe
+    macos:
+        name: macOS (auto arch)
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v4
 
-  macos:
-    name: macOS (auto arch)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: '1.24.6'
+                  cache: true
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.6"
-          cache: true
+            # 不裝 raylib，讓 binding 自理
+            - name: Build (select target by host arch)
+              run: |
+                  ARCH="$(uname -m)"
+                  echo "Host arch: $ARCH"
+                  if [ "$ARCH" = "arm64" ]; then
+                    make release
+                  else
+                    make darwin_amd64
+                  fi
 
-      # 不裝 raylib，讓 binding 自理
-      - name: Build (select target by host arch)
-        run: |
-          ARCH="$(uname -m)"
-          echo "Host arch: $ARCH"
-          if [ "$ARCH" = "arm64" ]; then
-            make release
-          else
-            make darwin_amd64
-          fi
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ github.event.repository.name }}-darwin
+                  path: |
+                      dist/*darwin-arm64
+                      dist/*darwin-amd64
+                  if-no-files-found: ignore
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ github.event.repository.name }}-darwin
-          path: |
-            dist/*darwin-arm64
-            dist/*darwin-amd64
-          if-no-files-found: ignore
+    release:
+        name: Release (on tag)
+        needs: [linux, windows, macos]
+        runs-on: ubuntu-latest
+        if: startsWith(github.ref, 'refs/tags/')
+        steps:
+            - uses: actions/download-artifact@v4
+              with:
+                  path: artifacts
 
-  release:
-    name: Release (on tag)
-    needs: [linux, windows, macos]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+            - name: Create archives
+              run: |
+                  mkdir -p dist
+                  # 這邊用通配符把成品打包，名稱可依你的 BINARY 調整
+                  f_linux=$(find artifacts -type f -name "*linux-amd64" -print -quit) && \
+                    cp "$f_linux" dist/app-linux-amd64 && tar -C dist -czf dist/app-linux-amd64.tar.gz app-linux-amd64 && rm dist/app-linux-amd64
+                  f_win=$(find artifacts -type f -name "*windows-amd64.exe" -print -quit) && \
+                    cp "$f_win" dist/app-windows-amd64.exe && zip -j dist/app-windows-amd64.zip dist/app-windows-amd64.exe && rm dist/app-windows-amd64.exe
+                  f_darwin_arm=$(find artifacts -type f -name "*darwin-arm64" -print -quit); if [ -n "$f_darwin_arm" ]; then cp "$f_darwin_arm" dist/app-darwin-arm64 && tar -C dist -czf dist/app-darwin-arm64.tar.gz app-darwin-arm64 && rm dist/app-darwin-arm64; fi
+                  f_darwin_amd=$(find artifacts -type f -name "*darwin-amd64" -print -quit); if [ -n "$f_darwin_amd" ]; then cp "$f_darwin_amd" dist/app-darwin-amd64 && tar -C dist -czf dist/app-darwin-amd64.tar.gz app-darwin-amd64 && rm dist/app-darwin-amd64; fi
 
-      - name: Create archives
-        run: |
-          mkdir -p dist
-          # 這邊用通配符把成品打包，名稱可依你的 BINARY 調整
-          f_linux=$(find artifacts -type f -name "*linux-amd64" -print -quit) && \
-            cp "$f_linux" dist/app-linux-amd64 && tar -C dist -czf dist/app-linux-amd64.tar.gz app-linux-amd64 && rm dist/app-linux-amd64
-          f_win=$(find artifacts -type f -name "*windows-amd64.exe" -print -quit) && \
-            cp "$f_win" dist/app-windows-amd64.exe && zip -j dist/app-windows-amd64.zip dist/app-windows-amd64.exe && rm dist/app-windows-amd64.exe
-          f_darwin_arm=$(find artifacts -type f -name "*darwin-arm64" -print -quit); if [ -n "$f_darwin_arm" ]; then cp "$f_darwin_arm" dist/app-darwin-arm64 && tar -C dist -czf dist/app-darwin-arm64.tar.gz app-darwin-arm64 && rm dist/app-darwin-arm64; fi
-          f_darwin_amd=$(find artifacts -type f -name "*darwin-amd64" -print -quit); if [ -n "$f_darwin_amd" ]; then cp "$f_darwin_amd" dist/app-darwin-amd64 && tar -C dist -czf dist/app-darwin-amd64.tar.gz app-darwin-amd64 && rm dist/app-darwin-amd64; fi
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+            - name: Publish GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: dist/*
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
