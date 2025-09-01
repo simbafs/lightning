@@ -2,14 +2,15 @@ name: build
 
 on:
     push:
-        branches:
-            - main
+        branches: [main]
 
 permissions:
     contents: write
 
 env:
     CGO_ENABLED: '1'
+    # 讓 workflow 與 Makefile 的 BINARY 同名（預設就是 repo 名）
+    BINARY: ${{ github.event.repository.name }}
 
 jobs:
     linux:
@@ -23,20 +24,23 @@ jobs:
                   go-version: '1.24.6'
                   cache: true
 
-            # 只需要基本編譯工具（gcc/make），不安裝 raylib
-            - name: Install build tools
+            - name: Install X11/GL dev packages
               run: |
                   sudo apt-get update
-                  sudo apt install libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev libwayland-dev libxkbcommon-dev
+                  sudo apt-get install -y \
+                    build-essential pkg-config \
+                    libasound2-dev libx11-dev libxrandr-dev libxi-dev \
+                    libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev \
+                    libxinerama-dev libwayland-dev libxkbcommon-dev
 
             - name: Build
-              run: make release
+              run: make release BINARY="${{ env.BINARY }}"
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4
               with:
                   name: ${{ github.event.repository.name }}-linux-amd64
-                  path: dist/*linux-amd64
+                  path: dist/${{ env.BINARY }}
 
     windows:
         name: Windows (amd64)
@@ -67,10 +71,16 @@ jobs:
                   go env
 
             - name: Build
-              run: make # or make build / make release
+              run: make release BINARY="${{ env.BINARY }}"
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ github.event.repository.name }}-windows-amd64
+                  path: dist/${{ env.BINARY }}.exe
 
     macos:
-        name: macOS (auto arch)
+        name: macOS (host arch)
         runs-on: macos-latest
         steps:
             - uses: actions/checkout@v4
@@ -80,25 +90,26 @@ jobs:
                   go-version: '1.24.6'
                   cache: true
 
-            # 不裝 raylib，讓 binding 自理
-            - name: Build (select target by host arch)
+            - name: Detect host arch
               run: |
                   ARCH="$(uname -m)"
-                  echo "Host arch: $ARCH"
-                  if [ "$ARCH" = "arm64" ]; then
-                    make release
-                  else
-                    make darwin_amd64
-                  fi
+                  # 統一成 go/發佈常用命名
+                  case "$ARCH" in
+                    x86_64) ARCH_OUT=amd64 ;;
+                    arm64)  ARCH_OUT=arm64 ;;
+                    *)      ARCH_OUT="$ARCH" ;;
+                  esac
+                  echo "DARWIN_ARCH=$ARCH_OUT" >> $GITHUB_ENV
+                  echo "Host arch: $ARCH_OUT"
+
+            - name: Build
+              run: make release BINARY="${{ env.BINARY }}"
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4
               with:
-                  name: ${{ github.event.repository.name }}-darwin
-                  path: |
-                      dist/*darwin-arm64
-                      dist/*darwin-amd64
-                  if-no-files-found: ignore
+                  name: ${{ github.event.repository.name }}-darwin-${{ env.DARWIN_ARCH }}
+                  path: dist/${{ env.BINARY }}
 
     release:
         name: Release (on tag)
@@ -110,16 +121,40 @@ jobs:
               with:
                   path: artifacts
 
+            - name: List artifacts
+              run: ls -R artifacts
+
             - name: Create archives
               run: |
+                  set -e
+                  REPO="${{ github.event.repository.name }}"
+                  BINARY="${{ env.BINARY }}"
                   mkdir -p dist
-                  # 這邊用通配符把成品打包，名稱可依你的 BINARY 調整
-                  f_linux=$(find artifacts -type f -name "*linux-amd64" -print -quit) && \
-                    cp "$f_linux" dist/app-linux-amd64 && tar -C dist -czf dist/app-linux-amd64.tar.gz app-linux-amd64 && rm dist/app-linux-amd64
-                  f_win=$(find artifacts -type f -name "*windows-amd64.exe" -print -quit) && \
-                    cp "$f_win" dist/app-windows-amd64.exe && zip -j dist/app-windows-amd64.zip dist/app-windows-amd64.exe && rm dist/app-windows-amd64.exe
-                  f_darwin_arm=$(find artifacts -type f -name "*darwin-arm64" -print -quit); if [ -n "$f_darwin_arm" ]; then cp "$f_darwin_arm" dist/app-darwin-arm64 && tar -C dist -czf dist/app-darwin-arm64.tar.gz app-darwin-arm64 && rm dist/app-darwin-arm64; fi
-                  f_darwin_amd=$(find artifacts -type f -name "*darwin-amd64" -print -quit); if [ -n "$f_darwin_amd" ]; then cp "$f_darwin_amd" dist/app-darwin-amd64 && tar -C dist -czf dist/app-darwin-amd64.tar.gz app-darwin-amd64 && rm dist/app-darwin-amd64; fi
+
+                  # Linux
+                  if [ -f "artifacts/$REPO-linux-amd64/$BINARY" ]; then
+                    cp "artifacts/$REPO-linux-amd64/$BINARY" "dist/${BINARY}-linux-amd64"
+                    tar -C dist -czf "dist/${BINARY}-linux-amd64.tar.gz" "${BINARY}-linux-amd64"
+                    rm "dist/${BINARY}-linux-amd64"
+                  fi
+
+                  # Windows
+                  if [ -f "artifacts/$REPO-windows-amd64/${BINARY}.exe" ]; then
+                    cp "artifacts/$REPO-windows-amd64/${BINARY}.exe" "dist/${BINARY}-windows-amd64.exe"
+                    zip -j "dist/${BINARY}-windows-amd64.zip" "dist/${BINARY}-windows-amd64.exe"
+                    rm "dist/${BINARY}-windows-amd64.exe"
+                  fi
+
+                  # macOS（可能是 arm64 或 amd64，統一處理）
+                  for d in artifacts/$REPO-darwin-*; do
+                    [ -d "$d" ] || continue
+                    arch="${d##*-darwin-}"
+                    if [ -f "$d/$BINARY" ]; then
+                      cp "$d/$BINARY" "dist/${BINARY}-darwin-${arch}"
+                      tar -C dist -czf "dist/${BINARY}-darwin-${arch}.tar.gz" "${BINARY}-darwin-${arch}"
+                      rm "dist/${BINARY}-darwin-${arch}"
+                    fi
+                  done
 
             - name: Publish GitHub Release
               uses: softprops/action-gh-release@v2
