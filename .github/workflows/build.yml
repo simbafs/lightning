@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y build-essential
 
       - name: Build
-        run: make linux_amd64
+        run: make release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -70,7 +70,7 @@ jobs:
           x86_64-w64-mingw32-gcc --version
 
       - name: Build
-        run: make win64
+        run: make release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -95,7 +95,7 @@ jobs:
           ARCH="$(uname -m)"
           echo "Host arch: $ARCH"
           if [ "$ARCH" = "arm64" ]; then
-            make darwin_arm64
+            make release
           else
             make darwin_amd64
           fi
