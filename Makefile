@@ -39,6 +39,15 @@ ifneq (,$(findstring MINGW,$(UNAME_S)))
   EXE := .exe
 endif
 
+GO_TAGS ?=
+ifeq ($(UNAME_S),Linux)
+  ifeq ($(USE_WAYLAND),1)
+    GO_TAGS += wayland
+  else
+    GO_TAGS += x11
+  endif
+endif
+
 # 依模式切換 flags
 ifeq ($(MODE),release)
   GO_LDFLAGS := $(GO_LDFLAGS_RELEASE)
@@ -84,6 +93,7 @@ build: $(DIST)
 	$(GO) build -o $(DIST)/$(BINARY)$(EXE) \
 		-ldflags "$(GO_LDFLAGS)" \
 		-gcflags "$(GO_GCFLAGS)" \
+		-tags "$(GO_TAGS)" \
 		.
 
 release:
