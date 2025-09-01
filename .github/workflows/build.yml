@@ -2,9 +2,8 @@ name: build
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ "v*.*.*", "release-*" ]
-  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -66,6 +65,7 @@ jobs:
 
       - name: Print toolchain
         run: |
+          which go
           which x86_64-w64-mingw32-gcc
           x86_64-w64-mingw32-gcc --version
 

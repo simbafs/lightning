@@ -1,140 +1,120 @@
-# run: 
-# 	go run -tags x11 .
-#
-# dev: 
-# 	nodemon -e go --watch './**/*.go' --signal SIGTERM --exec go run -tags x11 .
-#
-# build: 
-# 	go build -tags x11 .
+# ==============================
+# Local-only build (no cross)
+# ==============================
 
-# ---- 可自訂參數 -------------------------------------------------------------
-
-# 專案輸出檔名（不含附檔名），預設用目前資料夾名
+# 二進位檔名（預設用資料夾名）
 BINARY ?= $(notdir $(CURDIR))
 
-# Go 執行檔
+# 輸出資料夾
+DIST ?= dist
+
+# Go 與 CGO
 GO ?= go
+CGO ?= 1
 
-# Go 共通 ldflags（精簡符號表）
-GO_LDFLAGS ?= -s -w
+# 模式：release / debug
+MODE ?= release
 
-# 若你需要額外傳入 raylib 的 include/lib 路徑，可用環境變數覆蓋
+# 共用 flags
+GO_LDFLAGS_RELEASE ?= -s -w
+GO_LDFLAGS_DEBUG   ?=
+GO_GCFLAGS_DEBUG   ?= all=-N -l
+
+# 讓你可透過環境變數覆蓋（例如指定 include/lib）
+# 例：make build CGO_CFLAGS="-I$$HOME/raylib/include" CGO_LDFLAGS="-L$$HOME/raylib/lib -lraylib"
 CGO_CFLAGS ?=
 CGO_LDFLAGS ?=
 
-# MinGW / OSXCross 工具鏈（依照你系統實際安裝調整）
-CC_WIN64      ?= x86_64-w64-mingw32-gcc
-CC_WIN32      ?= i686-w64-mingw32-gcc
-CC_DARWIN_AMD ?= x86_64-apple-darwin21.1-clang
-CC_DARWIN_ARM ?= aarch64-apple-darwin21.1-clang
+# 偵測主機系統與附檔名
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
 
-# macOS 外部連結器版本門檻
-MACOSX_MIN_AMD ?= -mmacosx-version-min=10.15
-MACOSX_MIN_ARM ?= -mmacosx-version-min=12.0.0
+# Windows（含 MSYS2/MINGW）附檔名
+EXE :=
+ifeq ($(OS),Windows_NT)
+  EXE := .exe
+endif
+# 兼容 MSYS2/MINGW 的情況
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+  EXE := .exe
+endif
 
-# 成品輸出目錄
-DIST ?= dist
+# 依模式切換 flags
+ifeq ($(MODE),release)
+  GO_LDFLAGS := $(GO_LDFLAGS_RELEASE)
+  GO_GCFLAGS :=
+else
+  GO_LDFLAGS := $(GO_LDFLAGS_DEBUG)
+  GO_GCFLAGS := $(GO_GCFLAGS_DEBUG)
+endif
 
-# ---------------------------------------------------------------------------
+# macOS：如需設定最低版本，可自行覆蓋 MACOSX_MIN
+# 範例：make build MACOSX_MIN=-mmacosx-version-min=12.0
+ifeq ($(UNAME_S),Darwin)
+  ifneq ($(strip $(MACOSX_MIN)),)
+    GO_LDFLAGS := $(GO_LDFLAGS) '-extldflags=$(MACOSX_MIN)'
+  endif
+endif
 
-.PHONY: all help win64 win32 darwin_amd64 darwin_arm64 linux_amd64 linux_arm64 clean
+.PHONY: build release debug run clean info fmt vet help
 
-all: linux_amd64 win64 # darwin_amd64 # win32 darwin_arm64
+default: release
 
 help:
-	@echo "用法：make <target>"
+	@echo "用法："
+	@echo "  make build          以當前 MODE 編譯（預設 release）"
+	@echo "  make release        等同 MODE=release 的 build"
+	@echo "  make debug          等同 MODE=debug 的 build"
+	@echo "  make run            編譯後直接執行"
+	@echo "  make clean          清除 dist/"
+	@echo "  make info           顯示環境資訊"
 	@echo
-	@echo "可用 target："
-	@echo "  linux_amd64   編譯 Linux amd64 (本機常用)"
-	@echo "  linux_arm64   編譯 Linux arm64 (樹莓派等)"
-	@echo "  win64         交叉編譯 Windows amd64（需要 MinGW-w64）"
-	@echo "  win32         交叉編譯 Windows 386（需要 MinGW-w64）"
-	@echo "  darwin_amd64  交叉編譯 macOS x86_64（需要 OSXCross）"
-	@echo "  darwin_arm64  交叉編譯 macOS arm64（需要 OSXCross）"
-	@echo "  clean         刪除 dist/"
-	@echo
-	@echo "可覆蓋變數：BINARY, GO_LDFLAGS, CGO_CFLAGS, CGO_LDFLAGS"
+	@echo "常用覆蓋變數：BINARY, MODE, CGO_CFLAGS, CGO_LDFLAGS, MACOSX_MIN"
+	@echo "例：make build MODE=debug CGO_LDFLAGS='-L$$HOME/raylib/lib -lraylib'"
 
 $(DIST):
 	@mkdir -p $(DIST)
 
-# ---- Linux amd64 ------------------------------------------------------------
-linux_amd64: $(DIST)
-	@echo ">> Building Linux amd64..."
-	CGO_ENABLED=1 \
-	GOOS=linux GOARCH=amd64 \
+build: $(DIST)
+	@echo ">> Building (host) on $(UNAME_S)/$(UNAME_M) [MODE=$(MODE)]"
+	@echo ">> Output: $(DIST)/$(BINARY)$(EXE)"
+	CGO_ENABLED=$(CGO) \
 	CGO_CFLAGS="$(CGO_CFLAGS)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	$(GO) build -o $(DIST)/$(BINARY)-linux-amd64 \
-		-ldflags "$(GO_LDFLAGS)"
+	$(GO) build -o $(DIST)/$(BINARY)$(EXE) \
+		-ldflags "$(GO_LDFLAGS)" \
+		-gcflags "$(GO_GCFLAGS)" \
+		.
 
-	@file $(DIST)/$(BINARY)-linux-amd64 || true
+release:
+	$(MAKE) build MODE=release
 
-# ---- Linux arm64 ------------------------------------------------------------
-linux_arm64: $(DIST)
-	@echo ">> Building Linux arm64..."
-	CGO_ENABLED=1 \
-	GOOS=linux GOARCH=arm64 \
-	CGO_CFLAGS="$(CGO_CFLAGS)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	$(GO) build -o $(DIST)/$(BINARY)-linux-arm64 \
-		-ldflags "$(GO_LDFLAGS)"
+debug:
+	$(MAKE) build MODE=debug
 
-	@file $(DIST)/$(BINARY)-linux-arm64 || true
-
-# ---- Windows amd64 ----------------------------------------------------------
-win64: $(DIST)
-	@echo ">> Building Windows amd64..."
-	CGO_ENABLED=1 \
-	CC=$(CC_WIN64) \
-	GOOS=windows GOARCH=amd64 \
-	CGO_CFLAGS="$(CGO_CFLAGS)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	$(GO) build -o $(DIST)/$(BINARY)-windows-amd64.exe \
-		-ldflags "$(GO_LDFLAGS)"
-
-	@file $(DIST)/$(BINARY)-windows-amd64.exe || true
-
-# ---- Windows 386 ------------------------------------------------------------
-win32: $(DIST)
-	@echo ">> Building Windows 386..."
-	CGO_ENABLED=1 \
-	CC=$(CC_WIN32) \
-	GOOS=windows GOARCH=386 \
-	CGO_CFLAGS="$(CGO_CFLAGS)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	$(GO) build -o $(DIST)/$(BINARY)-windows-386.exe \
-		-ldflags "$(GO_LDFLAGS)"
-
-	@file $(DIST)/$(BINARY)-windows-386.exe || true
-
-# ---- macOS x86_64 -----------------------------------------------------------
-darwin_amd64: $(DIST)
-	@echo ">> Building macOS x86_64..."
-	CGO_ENABLED=1 \
-	CC=$(CC_DARWIN_AMD) \
-	GOOS=darwin GOARCH=amd64 \
-	CGO_CFLAGS="$(CGO_CFLAGS)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	$(GO) build -o $(DIST)/$(BINARY)-darwin-amd64 \
-		-ldflags "-linkmode external $(GO_LDFLAGS) '-extldflags=$(MACOSX_MIN_AMD)'"
-
-	@file $(DIST)/$(BINARY)-darwin-amd64 || true
-
-# ---- macOS arm64 ------------------------------------------------------------
-darwin_arm64: $(DIST)
-	@echo ">> Building macOS arm64..."
-	CGO_ENABLED=1 \
-	CC=$(CC_DARWIN_ARM) \
-	GOOS=darwin GOARCH=arm64 \
-	CGO_CFLAGS="$(CGO_CFLAGS)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	$(GO) build -o $(DIST)/$(BINARY)-darwin-arm64 \
-		-ldflags "-linkmode external $(GO_LDFLAGS) '-extldflags=$(MACOSX_MIN_ARM)'"
-
-	@file $(DIST)/$(BINARY)-darwin-arm64 || true
+run: build
+	@echo ">> Running ./$(DIST)/$(BINARY)$(EXE)"
+	@./$(DIST)/$(BINARY)$(EXE)
 
 clean:
 	@rm -rf $(DIST)
 	@echo ">> Cleaned $(DIST)/"
+
+fmt:
+	$(GO) fmt ./...
+
+vet:
+	$(GO) vet ./...
+
+info:
+	@echo "OS:      $(UNAME_S)"
+	@echo "ARCH:    $(UNAME_M)"
+	@echo "GO:      $$($(GO) version)"
+	@echo "CGO:     $(CGO)"
+	@echo "MODE:    $(MODE)"
+	@echo "BINARY:  $(BINARY)$(EXE)"
+	@echo "CFLAGS:  $(CGO_CFLAGS)"
+	@echo "LDFLAGS: $(CGO_LDFLAGS) | go -ldflags '$(GO_LDFLAGS)'"
+	@echo
+	@$(GO) env | grep -E 'GOOS|GOARCH|GOMOD|GOCACHE|GOMODCACHE' || true
 
