@@ -65,7 +65,7 @@ ifeq ($(UNAME_S),Darwin)
   endif
 endif
 
-.PHONY: build release debug run clean info fmt vet help
+.PHONY: build release debug run clean info fmt vet help dev
 
 default: release
 
@@ -128,3 +128,6 @@ info:
 	@echo
 	@$(GO) env | grep -E 'GOOS|GOARCH|GOMOD|GOCACHE|GOMODCACHE' || true
 
+
+dev: 
+	nodemon -e go --watch './**/*.go' --signal SIGTERM --exec go run -tags x11 .
